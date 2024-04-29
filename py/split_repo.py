@@ -145,7 +145,6 @@ def upload(file_name: Path, bucket: str, object_name=None):
     if object_name is None:
         object_name = file_name.name
 
-    print("Uploading: ", object_name)
     if file_name.name.startswith("repodata"):
         cache = "public, max-age=36000"
     else:
@@ -165,6 +164,62 @@ def upload(file_name: Path, bucket: str, object_name=None):
         print(e)
         return False
     return True
+
+
+def files_to_upload(outpath, timestamp, subdir, channel_name):
+    # first download current index file from the fast-repo
+    index_file = outpath / "old" / timestamp / subdir / "repodata_shards.msgpack"
+    index_file.parent.mkdir(parents=True, exist_ok=True)
+    index_url = f"https://fast.prefiks.dev/{channel_name}/{subdir}/repodata_shards.msgpack.zst?bust_cache={timestamp}"
+
+    response = requests.get(index_url)
+    files = []
+    shard_hashes = set()
+    if response.status_code == 200:
+        # decode with zstd and msgpack
+        decompressor = zstd.ZstdDecompressor()
+        decompressed = decompressor.decompress(response.content)
+        index_data = msgpack.loads(decompressed)
+        index_file.write_bytes(decompressed)
+
+        # find all shard hashes already in the index
+        print("Reading shard hashes from index file")
+        for name, shard in index_data["shards"].items():
+            if isinstance(shard, bytes):
+                shard: bytes = shard
+                shard_hashes.add(shard.hex())
+            else:
+                shard_hashes.add(shard["sha256"])
+
+    skipped = 0
+    total = 0
+    # Iterate over all files in the directory
+    for file in (outpath / subdir).rglob("**/*"):
+        if file.is_file():
+            # Skip the 'repodata.json' file
+            if file.name.startswith("repodata.json"):
+                continue
+
+            # skip if we have the shard already
+            filename = file.name
+            # remove msgpack.zst extension
+            if filename.endswith(".msgpack.zst"):
+                filename = filename[:-12]
+
+            total += 1
+            if filename in shard_hashes:
+                skipped += 1
+                continue
+
+            # Submit the 'upload' function to the executor for each file
+            object_name = f"{channel_name}/{file.relative_to(outpath)}"
+            print("Uploading: ", object_name)
+            files.append((file, object_name))
+
+    print(f"Skipped {skipped} out of {total} files")
+    print(f"Percentage skipped: {skipped/total*100}%")
+
+    return files
 
 
 if __name__ == "__main__":
@@ -204,58 +259,8 @@ if __name__ == "__main__":
         channel_url = f"https://conda.anaconda.org/{channel_name}/"
         split_repo(channel_url, subdir, outpath)
 
+        files = files_to_upload(outpath, timestamp, subdir, channel_name)
+
         with ThreadPoolExecutor(max_workers=50) as executor:
-            # first download current index file from the fast-repo
-            index_file = (
-                outpath / "old" / timestamp / subdir / "repodata_shards.msgpack"
-            )
-            index_file.parent.mkdir(parents=True, exist_ok=True)
-            index_url = f"https://fast.prefiks.dev/{channel_name}/{subdir}/repodata_shards.msgpack.zst?bust_cache={timestamp}"
-
-            response = requests.get(index_url)
-
-            shard_hashes = set()
-            if response.status_code == 200:
-                # decode with zstd and msgpack
-                decompressor = zstd.ZstdDecompressor()
-                decompressed = decompressor.decompress(response.content)
-                index_data = msgpack.loads(decompressed)
-                index_file.write_bytes(decompressed)
-
-                # find all shard hashes already in the index
-                # try:
-                print("Reading shard hashes from index file")
-                for name, shard in index_data["shards"].items():
-                    if isinstance(shard, bytes):
-                        shard: bytes = shard
-                        shard_hashes.add(shard.hex())
-                    else:
-                        shard_hashes.add(shard["sha256"])
-
-            skipped = 0
-            total = 0
-            # Iterate over all files in the directory
-            for file in (outpath / subdir).rglob("**/*"):
-                total += 1
-                if file.is_file():
-                    # Skip the 'repodata.json' file
-                    if file.name.startswith("repodata.json"):
-                        continue
-
-                    # skip if we have the shard already
-                    filename = file.name
-                    # remove msgpack.zst extension
-                    if filename.endswith(".msgpack.zst"):
-                        filename = filename[:-12]
-
-                    if filename in shard_hashes:
-                        skipped += 1
-                        continue
-
-                    # Submit the 'upload' function to the executor for each file
-                    object_name = f"{channel_name}/{file.relative_to(outpath)}"
-                    print("Uploading: ", object_name)
-                    executor.submit(upload, file, "fast-repo", object_name=object_name)
-
-            print(f"Skipped {skipped} out of {total} files")
-            print(f"Percentage skipped: {skipped/total*100}%")
+            for file, object_name in files:
+                executor.submit(upload, file, "fast-repo", object_name=object_name)

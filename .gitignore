@@ -7,3 +7,5 @@ trash/
 # Added by cargo
 
 /target
+
+secret.sh
