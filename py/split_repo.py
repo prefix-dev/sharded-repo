@@ -146,7 +146,7 @@ def upload(file_name: Path, bucket: str, object_name=None):
         object_name = file_name.name
 
     if file_name.name.startswith("repodata"):
-        cache = "public, max-age=36000"
+        cache = "public, max-age=60"
     else:
         cache = "public, max-age=31536000, immutable"
 
