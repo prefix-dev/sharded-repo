@@ -159,7 +159,7 @@ def upload(file_name: Path, bucket: str, object_name=None):
                 "CacheControl": cache,
             },
         )
-        print("Upload successful: ", file_name)
+        print("Upload successful: ", object_name)
     except ClientError as e:
         print(e)
         return False
@@ -194,7 +194,7 @@ def files_to_upload(outpath, timestamp, subdir, channel_name):
     skipped = 0
     total = 0
     # Iterate over all files in the directory
-    for file in (outpath / subdir).rglob("**/*"):
+    for file in (outpath / subdir).rglob("shards/*"):
         if file.is_file():
             # Skip the 'repodata.json' file
             if file.name.startswith("repodata.json"):
@@ -272,3 +272,10 @@ if __name__ == "__main__":
         with ThreadPoolExecutor(max_workers=50) as executor:
             for file, object_name in files:
                 executor.submit(upload, file, "fast-repo", object_name=object_name)
+
+        # Upload the index file
+        upload(
+            outpath / subdir / "repodata_shards.msgpack.zst",
+            "fast-repo",
+            f"{channel_name}/{subdir}/repodata_shards.msgpack.zst",
+        )
