@@ -251,6 +251,14 @@ if __name__ == "__main__":
     ]
     subdirs = args.subdirs if not args.all_subdirs else all_subdirs
 
+    final_subdirs = []
+    for s in subdirs:
+        if "," in s:
+            final_subdirs.extend(s.split(","))
+        else:
+            final_subdirs.append(s)
+    subdirs = final_subdirs
+
     channel_name = args.channel
     outpath = Path(args.cache_dir) / channel_name
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")

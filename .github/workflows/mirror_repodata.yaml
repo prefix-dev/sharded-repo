@@ -1,0 +1,30 @@
+name: Mirror repodata
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'The channel to mirror'
+        required: true
+        default: 'conda-forge'
+      subdirs:
+        description: 'The subdirs to mirror'
+        required: true
+        default: 'linux-64,osx-arm64,win-64,noarch'
+jobs:
+  test:
+    strategy:
+    fail-fast: false
+    matrix:
+      os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.6.0
+        with:
+          pixi-version: v0.20.1
+          cache: true
+      - env:
+          
+        run: |
+          pixi run start --channel ${{ github.event.inputs.channel }} --subdirs ${{ github.event.inputs.subdirs }}
