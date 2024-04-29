@@ -30,14 +30,9 @@ The contents look like the following (written in JSON for readability):
     "...": "other metadata"
   },
   "shards": {
-    "python": {
-      "sha256": "ad2c69dfa11125300530f5b390aa0f7536d1f566a6edc8823fd72f9aa33c4910",
-      "size": 12345
-    },
-    "numpy": {
-      "sha256": "27ea8f80237eefcb6c587fb3764529620aefb37b9a9d3143dce5d6ba4667583d",
-      "size": 67890
-    },
+    // note that the hashes are stored as binary data (hex encoding just for visualization)
+    "python": b"ad2c69dfa11125300530f5b390aa0f7536d1f566a6edc8823fd72f9aa33c4910",
+    "numpy": b"27ea8f80237eefcb6c587fb3764529620aefb37b9a9d3143dce5d6ba4667583d"
     "...": "other packages"
   }
 }

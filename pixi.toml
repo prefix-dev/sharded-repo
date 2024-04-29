@@ -10,6 +10,8 @@ platforms = ["osx-arm64"]
 fmt = "ruff format"
 conda-forge = "python py/split_repo.py --channel conda-forge"
 robostack = "python py/split_repo.py --channel robostack --all-subdirs"
+start = "python py/split_repo.py"
+
 [dependencies]
 requests = ">=2.31.0,<2.32"
 python = ">=3.12.3,<3.13"
