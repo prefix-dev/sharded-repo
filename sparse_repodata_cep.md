@@ -6,24 +6,38 @@ We also change the encoding from JSON to MSGPACK for faster decoding.
 
 ## Motivation
 
-The current repodata format is a JSON file that contains all the packages in a given channel. Unfortunately, that means it grows with the number of packages in the channel. This is a problem for large channels like conda-forge, which has over 100,000 packages. It becomes very slow to fetch, parse and update the repodata.
+The current repodata format is a JSON file that contains all the packages in a given channel. Unfortunately, that means it grows with the number of packages in the channel. This is a problem for large channels like conda-forge, which has over 150,000+ packages. It becomes very slow to fetch, parse and update the repodata.
+
+## Previous work
+
+In a previous CEP, [JLAP](https://github.com/conda-incubator/ceps/pull/20) was introduced. 
+With JLAP only the changes to an initially downloaded `repodata.json` file have to be downloaded which means the user drastically saves on bandwidth which in turn makes fetching repodata much faster. 
+However, in practice patching the original repodata can be a very expensive operation, both in terms of memory and in terms of compute.
+JLAP also does not save anything with a cold cache which is often the case for CI runners.
+Finally, the implementation of JLAP is quite complex which makes it hard to adopt for implementers. 
 
 ## Proposal
 
 We propose a "sharded" repodata format. It works by splitting the repodata into multiple files (one per package name) and recursively fetching the "shards".
 
-The shards are stored in a "content-addressable" way. That means that the URL of the shard is derived from the content of the shard. This allows for efficient caching and deduplication of shards.
+The shards are stored by the hash of their content (e.g. "content-addressable"). 
+That means that the URL of the shard is derived from the content of the shard. This allows for efficient caching and deduplication of shards.
 
-We also have an index file that stores the mapping from package name to shard URL.
+An index file stores the mapping from package name to shard URL.
+
+Although not explicitly required the server SHOULD support HTTP/2 to reduce the overhead of doing a massive number of requests. 
 
 ### Repodata shard index
 
-The shard index is a file that is stored under `<channel>/<subdir>/repodata_shards.msgpack.zst`. It is a msgpack file that contains a mapping from package name to shard URL.
+The shard index is a file that is stored under `<channel>/<subdir>/repodata_shards.msgpack.zst`. It is a zstandard compressed `msgpack` file that contains a mapping from package name to shard hash.
+
+We suggest serving the file with a short lived `Cache-Control` `max-age` header of 60 seconds to an hour.
 
 The contents look like the following (written in JSON for readability):
 
 ```json
 {
+  "version": 1,
   "info": {
     "base_url": "https://example.com/channel/subdir/",
     "created_at": "2022-01-01T00:00:00Z",
@@ -40,11 +54,13 @@ The contents look like the following (written in JSON for readability):
 
 ### Repodata shard
 
-The shard is stored under the URL `<channel>/<subdir>/repodata_shards/<sha256>.msgpack.zst`. It is a msgpack file that contains the metadata of the package.
+Individual shards are stored under the URL `<channel>/<subdir>/repodata_shards/<sha256>.msgpack.zst`. Where the `sha256` is the lower-case hex representation of the bytes from the index. It is a zstandard compressed msgpack file that contains the metadata of the package.
 
-The shard contains the repodata information that would otherwise have been found in the repodata.json file. It is a dictionary that contains the following keys:
+The files are content-addressable which makes them ideal to be served through a CDN. They SHOULD be served with `Cache-Control: immutable` header.
 
-**Example:**
+The shard contains the repodata information that would otherwise have been found in the `repodata.json` file. It is a dictionary that contains the following keys:
+
+**Example (written in JSON for readability):**
 
 ```json
 {
@@ -97,22 +113,15 @@ The shard contains the repodata information that would otherwise have been found
 }
 ```
 
-## Repodata extensions
-
-We propose the following modifications to the current repodata format:
-
-- remove redundant keys: `platform`, `arch` (can be inferred from `subdir`)
-- add `purl` as a list of strings (Package URLs to reference to original source of the package)
-- add `run_exports` as a list of strings (run-exports needed to build the package)
-
 ## Fetch process
 
 To fetch all needed package records, the client should implement the following steps:
 
-- Fetch the `repodata_shards.msgpack.zst` file if no cached version is available (cache for 60 minutes)
-- For each directly required package name, start fetching the corresponding hashes from the index file (for both arch & and noarch)
-- Start parsing the requirements and recursively fetch _all_ dependencies (including the dependencies of the dependencies)
-- Dump the fetched shards in a local cache (e.g. `~/.conda/cache/repodata_shards/`) and store them with the sha256 hash as the filename
+1. Fetch the `repodata_shards.msgpack.zst` file. Standard HTTP caching semantics can be applied to this file.
+2. For each package name, start fetching the corresponding hashes from the index file (for both arch & and noarch). 
+    Shards can be cached locally and because they are content-addressable no additional round-trips to the server are required to check freshness. The server should also mark these with an `immutable` `Cache-Control` header.
+3. Parsing the requirements of the fetched records and add the package names of the requirements to the set of packages to fetch.
+4. Loop back to 2. until there are no new package names to fetch.
 
 ## Garbage collection
 
@@ -120,7 +129,22 @@ To avoid the cache from growing indefinitely, we propose to implement a garbage 
 
 On the client side, a garbage collection process should run every so often to remove old shards from the cache. This can be done by comparing the cached shards with the index file and removing those that are not referenced anymore.
 
-## Update optimization
+## Future: Repodata extensions
+
+We propose the following modifications to the current repodata format:
+
+- remove redundant keys: `platform`, `arch` (these can be inferred from `subdir`)
+
+With the total size of the repodata reduced it becomes feasible to add additional fields directly to the repodata records. Exampels are:
+
+- add `purl` as a list of strings (Package URLs to reference to original source of the package) (See: https://github.com/conda-incubator/ceps/pull/63)
+- add `run_exports` as a list of strings (run-exports needed to build the package) (See: https://github.com/conda-incubator/ceps/pull/51)
+
+## Future work: Authorization
+
+TODO
+
+## Future work: Update optimization
 
 We want to implement support for smaller index update files. This is done by creating a rolling daily and weekly index update file that can be used instead of fetching the whole `repodata_shards.msgpack.zst` file. The update operation is very simple (just update the hashmap with the new entries).
 
