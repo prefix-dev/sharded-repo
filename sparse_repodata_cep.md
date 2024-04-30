@@ -144,7 +144,7 @@ Although these files can become relatively large (100s of kilobytes) typically f
 
 ## <a id="authentication"></a>Authentication
 
-To faciliate authentication and authorization we propose to add an additional endpoint/file at `<channel>/<subdir>/token` with the following content:
+To faciliate authentication and authorization we propose to add an additional endpoint at `<channel>/<subdir>/token` with the following content:
 
 ```json
 {
@@ -167,12 +167,12 @@ For a simple implementor this endpoint could just be a static file with `{}` as 
 
 To fetch all needed package records, the client should implement the following steps:
 
-1. Acquire a token (see: [Authentication](#authentication))
-1. Fetch the `repodata_shards.msgpack.zst` file. Standard HTTP caching semantics can be applied to this file.
-2. For each package name, start fetching the corresponding hashes from the index file (for both arch & and noarch). 
+1. Acquire a token (see: [Authentication](#authentication)). Acquiring a token can be done lazily as to only request a token when an actual network request is performed.
+2. Fetch the `repodata_shards.msgpack.zst` file. Standard HTTP caching semantics can be applied to this file.
+3. For each package name, start fetching the corresponding hashes from the index file (for both arch & and noarch). 
     Shards can be cached locally and because they are content-addressable no additional round-trips to the server are required to check freshness. The server should also mark these with an `immutable` `Cache-Control` header.
-3. Parsing the requirements of the fetched records and add the package names of the requirements to the set of packages to fetch.
-4. Loop back to 2. until there are no new package names to fetch.
+4. Parsing the requirements of the fetched records and add the package names of the requirements to the set of packages to fetch.
+5. Loop back to 2. until there are no new package names to fetch.
 
 ## Garbage collection
 
@@ -244,3 +244,7 @@ For this we propose to add the following two files:
 - `<channel>/<subdir>/repodata_shards_weekly.msgpack.zst`
 
 They will contain the same format as the `repodata_shards.msgpack.zst` file but only contain the packages that have been updated in the last day or week respectively. The `created_at` field in the index file can be used to determine which file to fetch to make sure that the client has the latest information.
+
+### Store `set(dependencies)` at the start of the shards or in a header
+
+To reduce the time it takes to parse a shard and start fetching its dependencies we could also store the set of all dependencies in the file at the start of the shard or in a seperate header. This could enable fetching recursive dependencies while still parsing the records.
