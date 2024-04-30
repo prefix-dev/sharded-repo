@@ -19,6 +19,10 @@ from rich.progress import (
     BarColumn,
 )
 
+fake_token = {
+    "token": "iamasecrettoken"
+}
+
 
 def download_file(url):
     response = requests.get(url, stream=True)
@@ -279,4 +283,13 @@ if __name__ == "__main__":
             outpath / subdir / "repodata_shards.msgpack.zst",
             "fast-repo",
             f"{channel_name}/{subdir}/repodata_shards.msgpack.zst",
+        )
+
+        # Upload the fake token
+        tempfile = Path(__file__).parent / "token"
+        tempfile.write_text(json.dumps(fake_token))
+        upload(
+            tempfile,
+            "fast-repo",
+            f"{channel_name}/{subdir}/token",
         )
