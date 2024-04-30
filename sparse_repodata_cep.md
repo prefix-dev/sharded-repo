@@ -54,7 +54,7 @@ The contents look like the following (written in JSON for readability):
 
 ### Repodata shard
 
-Individual shards are stored under the URL `<channel>/<subdir>/repodata_shards/<sha256>.msgpack.zst`. Where the `sha256` is the lower-case hex representation of the bytes from the index. It is a zstandard compressed msgpack file that contains the metadata of the package.
+Individual shards are stored under the URL `<channel>/<subdir>/shards/<sha256>.msgpack.zst`. Where the `sha256` is the lower-case hex representation of the bytes from the index. It is a zstandard compressed msgpack file that contains the metadata of the package.
 
 The files are content-addressable which makes them ideal to be served through a CDN. They SHOULD be served with `Cache-Control: immutable` header.
 
