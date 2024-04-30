@@ -8,30 +8,51 @@ We also change the encoding from JSON to MSGPACK for faster decoding.
 
 The current repodata format is a JSON file that contains all the packages in a given channel. Unfortunately, that means it grows with the number of packages in the channel. This is a problem for large channels like conda-forge, which has over 150,000+ packages. It becomes very slow to fetch, parse and update the repodata.
 
+## Design goals
+
+1. **Speed**: Fetching repodata MUST be very fast. Both in the hot- and cold-cache case.
+2. **Easy to update**: The channel MUST be very easy to update when new packages become available.
+3. **CDN friendly**: A CDN MUST be usable to cache the majority of the data. This reduces the operating cost of a channel.
+4. **Support authN and authZ**: It MUST be possible to implement authentication and authorization with little extra overhead.
+5. **Easy to implement**: It MUST be relatively straightforward to implement to ease the adoption in different tools.
+6. **Client-side cachable**: If a user has a hot cache the user SHOULD only have to download small incremental changes. Preferably as little communication as possible with the server should be required to check freshness of the data.
+7. **Bandwidth optimized**: Any data that is transferred SHOULD be as small as possible.
+
 ## Previous work
 
+### JLAP
+
 In a previous CEP, [JLAP](https://github.com/conda-incubator/ceps/pull/20) was introduced. 
-With JLAP only the changes to an initially downloaded `repodata.json` file have to be downloaded which means the user drastically saves on bandwidth which in turn makes fetching repodata much faster. 
-However, in practice patching the original repodata can be a very expensive operation, both in terms of memory and in terms of compute.
-JLAP also does not save anything with a cold cache which is often the case for CI runners.
+With JLAP only the changes to an initially downloaded `repodata.json` file have to be downloaded which means the user drastically saves on bandwidth which in turn makes fetching repodata much faster.
+
+However, in practice patching the original repodata can be a very expensive operation, both in terms of memory and in terms of compute because of the shear amount of data involved.
+
+JLAP also does not save anything with a cold cache because the initial repodata still has to be downloaded. THis is often the case for CI runners.
+
 Finally, the implementation of JLAP is quite complex which makes it hard to adopt for implementers. 
+
+### ZSTD compression
+
+A notable improvement is compressing the `repodata.json` with `zst` and serving that file. In practice this yields a file that is 20% smaller (20-30 Mb for large cases). Although this is still quite a big file its substantially smaller. 
+
+However, the file still contains all repodata in the channel. This means the file needs to be redownloaded every time anyone adds a single package (even if a user doesnt need that package).
+
+Because the file is relatively big this means that often a large `max-age` is used for caching which means it takes more time to propagate new packages through the ecosystem.
 
 ## Proposal
 
 We propose a "sharded" repodata format. It works by splitting the repodata into multiple files (one per package name) and recursively fetching the "shards".
 
 The shards are stored by the hash of their content (e.g. "content-addressable"). 
-That means that the URL of the shard is derived from the content of the shard. This allows for efficient caching and deduplication of shards.
+That means that the URL of the shard is derived from the content of the shard. This allows for efficient caching and deduplication of shards on the client. Because the files are content-addressable no round-trip to the server is required to check fressness of individual shards.
 
-An index file stores the mapping from package name to shard URL.
+Additionally an index file stores the mapping from package name to shard hash.
 
 Although not explicitly required the server SHOULD support HTTP/2 to reduce the overhead of doing a massive number of requests. 
 
 ### Repodata shard index
 
 The shard index is a file that is stored under `<channel>/<subdir>/repodata_shards.msgpack.zst`. It is a zstandard compressed `msgpack` file that contains a mapping from package name to shard hash.
-
-We suggest serving the file with a short lived `Cache-Control` `max-age` header of 60 seconds to an hour.
 
 The contents look like the following (written in JSON for readability):
 
@@ -51,6 +72,12 @@ The contents look like the following (written in JSON for readability):
   }
 }
 ```
+
+The index is still updated regularly but the file does not increase in size with every package added, only when new package names are added which happens much less often.
+
+For a large case (conda-forge linux-64) this files is 670kb at the time of writing.
+
+We suggest serving the file with a short lived `Cache-Control` `max-age` header of 60 seconds to an hour but we leave it up to the channel administrator to set a value that works for that channel.
 
 ### Repodata shard
 
@@ -113,6 +140,8 @@ The shard contains the repodata information that would otherwise have been found
 }
 ```
 
+Although these files can become relatively large (100s of kilobytes) typically for a large case (conda-forge) these files remaing very small, e.g. 100s of bytes to a couple of kilobytes.
+
 ## Fetch process
 
 To fetch all needed package records, the client should implement the following steps:
@@ -129,24 +158,63 @@ To avoid the cache from growing indefinitely, we propose to implement a garbage 
 
 On the client side, a garbage collection process should run every so often to remove old shards from the cache. This can be done by comparing the cached shards with the index file and removing those that are not referenced anymore.
 
-## Future: Repodata extensions
 
-We propose the following modifications to the current repodata format:
+## Rejected ideas
 
-- remove redundant keys: `platform`, `arch` (these can be inferred from `subdir`)
+### SHA hash compression
+
+SHA hashes are non-compressable because in the eyes of the compressor it is just random data. We have investigated using a binary prefix tree to enable better compression but this increased the complexity of the implementation quite a bit which conflicts with our goal of keeping things simple.
+
+### Shorter SHA hashes
+
+Another approach would be to only store the first 100 bytes or so of the SHA hash. This reduces the total size of the sha hashes significantly but it makes the client side implementation more complex because hash conflicts become an issue. 
+
+This also makes a future implementation based on a OCI registry harder because layers in an OCI registry are also referenced by SHA256 hash.
+
+### Storing the data as a struct of arrays
+
+To improve compression we investigated storing the index file as a struct of arrays instead of as an array of structs:
+
+```json
+[
+ {
+  "name": "",
+  "hash": "",
+ },
+ {
+  "name": "",
+  "hash": "",
+ } 
+]
+```
+
+vs
+
+```json
+{
+  "names": [...],
+  "hashes": [...]
+}
+```
+
+This did yield slightly better compression but we felt it makes it slightly harder to implement and adapt in the future which we deemed not worth the small size decrease.
+
+## Future improvements
+
+### Remove redundant keys
+
+`platform` and `arch` can be removed because these can be inferred from `subdir`.
+
+### Integrating additional data
 
 With the total size of the repodata reduced it becomes feasible to add additional fields directly to the repodata records. Exampels are:
 
 - add `purl` as a list of strings (Package URLs to reference to original source of the package) (See: https://github.com/conda-incubator/ceps/pull/63)
 - add `run_exports` as a list of strings (run-exports needed to build the package) (See: https://github.com/conda-incubator/ceps/pull/51)
 
-## Future work: Authorization
+### Update optimization
 
-TODO
-
-## Future work: Update optimization
-
-We want to implement support for smaller index update files. This is done by creating a rolling daily and weekly index update file that can be used instead of fetching the whole `repodata_shards.msgpack.zst` file. The update operation is very simple (just update the hashmap with the new entries).
+We could implement support for smaller index update files. This can be done by creating a rolling daily and weekly index update file that can be used instead of fetching the whole `repodata_shards.msgpack.zst` file. The update operation is very simple (just update the hashmap with the new entries).
 
 For this we propose to add the following two files:
 
