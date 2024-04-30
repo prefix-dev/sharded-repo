@@ -52,7 +52,7 @@ Although not explicitly required the server SHOULD support HTTP/2 to reduce the 
 
 ### Repodata shard index
 
-The shard index is a file that is stored under `<channel>/<subdir>/repodata_shards.msgpack.zst`. It is a zstandard compressed `msgpack` file that contains a mapping from package name to shard hash.
+The shard index is a file that is stored under `<shard_base_url>/<subdir>/repodata_shards.msgpack.zst`. It is a zstandard compressed `msgpack` file that contains a mapping from package name to shard hash. The `<shard_base_url>` is defined in [Authentication](#authentication).
 
 The contents look like the following (written in JSON for readability):
 
@@ -81,7 +81,7 @@ We suggest serving the file with a short lived `Cache-Control` `max-age` header 
 
 ### Repodata shard
 
-Individual shards are stored under the URL `<channel>/<subdir>/shards/<sha256>.msgpack.zst`. Where the `sha256` is the lower-case hex representation of the bytes from the index. It is a zstandard compressed msgpack file that contains the metadata of the package.
+Individual shards are stored under the URL `<shard_base_url>/<subdir>/shards/<sha256>.msgpack.zst`. Where the `sha256` is the lower-case hex representation of the bytes from the index. It is a zstandard compressed msgpack file that contains the metadata of the package. The `<shard_base_url>` is defined in [Authentication](#authentication).
 
 The files are content-addressable which makes them ideal to be served through a CDN. They SHOULD be served with `Cache-Control: immutable` header.
 
@@ -142,10 +142,32 @@ The shard contains the repodata information that would otherwise have been found
 
 Although these files can become relatively large (100s of kilobytes) typically for a large case (conda-forge) these files remaing very small, e.g. 100s of bytes to a couple of kilobytes.
 
+## <a id="authentication"></a>Authentication
+
+To faciliate authentication and authorization we propose to add an additional endpoint/file at `<channel>/<subdir>/token` with the following content:
+
+```json
+{
+    "shard_base_url": "https://shards.prefix.dev/conda-forge/<subdir>/",
+    "token": "<bearer token>",
+    "issued_at": "2024-01-30T03:35:39.896023447Z",
+    "expires_in": 300,
+}
+```
+
+`shard_base_url` is an optional url to use as the base url for the `repodata_shards.msgpack.zst` and the individual shards. If the field is not specified it should default to `<channel>/<subdir>`.
+
+`token` is an optional field that if set MUST be added to any subsequent request in the `Authentication` header as `Authentication: Bearer <token>`. If the `token` field is not set sending the `Authentication` header is also not required. 
+
+The optional `issued_at` and `expires_in` fields can be used to verify the freshness of a token. If the fields are not present a client can assume that the token is valid for any subsequent request.
+
+For a simple implementor this endpoint could just be a static file with `{}` as the content.
+
 ## Fetch process
 
 To fetch all needed package records, the client should implement the following steps:
 
+1. Acquire a token (see: [Authentication](#authentication))
 1. Fetch the `repodata_shards.msgpack.zst` file. Standard HTTP caching semantics can be applied to this file.
 2. For each package name, start fetching the corresponding hashes from the index file (for both arch & and noarch). 
     Shards can be cached locally and because they are content-addressable no additional round-trips to the server are required to check freshness. The server should also mark these with an `immutable` `Cache-Control` header.
