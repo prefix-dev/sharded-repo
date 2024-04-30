@@ -19,9 +19,7 @@ from rich.progress import (
     BarColumn,
 )
 
-fake_token = {
-    "token": "iamasecrettoken"
-}
+fake_token = {"token": "iamasecrettoken"}
 
 
 def download_file(url):
@@ -50,6 +48,14 @@ def download_file(url):
 def sha256(data):
     hash = hashlib.sha256(data)
     return hash.digest(), hash.hexdigest()
+
+
+def pack_package_record(record):
+    if record["sha256"]:
+        record["sha256"] = bytes.fromhex(record["sha256"])
+    if record["md5"]:
+        record["md5"] = bytes.fromhex(record["md5"])
+    return record
 
 
 def split_repo(repo_url, subdir, folder):
@@ -96,6 +102,7 @@ def split_repo(repo_url, subdir, folder):
     shards.mkdir(exist_ok=True)
     shards_index = {"info": repodata["info"], "shards": {}}
     shards_index["info"]["base_url"] = f"{repo_url}/{subdir}/"
+
     compressor = zstd.ZstdCompressor(level=19)
 
     before = 0
@@ -103,9 +110,15 @@ def split_repo(repo_url, subdir, folder):
 
     # create a rich progress bar
     for name in track(all_names, description=f"Processing {subdir}"):
-        d = {"packages": {fn: packages[fn] for fn in package_names.get(name, [])}}
+        d = {
+            "packages": {
+                fn: pack_package_record(packages[fn])
+                for fn in package_names.get(name, [])
+            }
+        }
         d["packages.conda"] = {
-            fn: conda_packages[fn] for fn in conda_package_names.get(name, [])
+            fn: pack_package_record(conda_packages[fn])
+            for fn in conda_package_names.get(name, [])
         }
 
         encoded = msgpack.dumps(d)
@@ -132,6 +145,7 @@ def split_repo(repo_url, subdir, folder):
     repodata_shards_file = folder / subdir / "repodata_shards.msgpack.zst"
     repodata_shards = compressor.compress(msgpack.dumps(shards_index))
     repodata_shards_file.write_bytes(repodata_shards)
+
     return package_names
 
 
@@ -286,7 +300,7 @@ if __name__ == "__main__":
         )
 
         # Upload the fake token
-        tempfile = Path(__file__).parent / "token"
+        tempfile = outpath / subdir / "token"
         tempfile.write_text(json.dumps(fake_token))
         upload(
             tempfile,
