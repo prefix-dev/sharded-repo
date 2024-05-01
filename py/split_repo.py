@@ -51,10 +51,10 @@ def sha256(data):
 
 
 def pack_package_record(record):
-    if record["sha256"]:
-        record["sha256"] = bytes.fromhex(record["sha256"])
-    if record["md5"]:
-        record["md5"] = bytes.fromhex(record["md5"])
+    if sha256 := record.get("sha256"):
+        record["sha256"] = bytes.fromhex(sha256)
+    if md5 := record.get("md5"):
+        record["md5"] = bytes.fromhex(md5)
     return record
 
 
