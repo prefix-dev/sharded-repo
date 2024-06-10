@@ -102,6 +102,7 @@ def split_repo(repo_url, subdir, folder):
     shards.mkdir(exist_ok=True)
     shards_index = {"info": repodata["info"], "shards": {}}
     shards_index["info"]["base_url"] = f"{repo_url}/{subdir}/"
+    shards_index["info"]["shards_base_url"] = f"./shards/"
 
     compressor = zstd.ZstdCompressor(level=19)
 
