@@ -50,16 +50,19 @@ def sha256(data):
     return hash.digest(), hash.hexdigest()
 
 
-def pack_package_record(record):
+def pack_package_record(record, run_exports=None):
     if sha256 := record.get("sha256"):
         record["sha256"] = bytes.fromhex(sha256)
     if md5 := record.get("md5"):
         record["md5"] = bytes.fromhex(md5)
+    if run_exports:
+        record["run_exports"] = run_exports
     return record
 
 
 def split_repo(repo_url, subdir, folder):
     repodata = folder / subdir / "repodata.json"
+    run_exports = folder / subdir / "run_exports.json"
 
     if not repodata.parent.exists():
         repodata.parent.mkdir(parents=True)
@@ -73,8 +76,18 @@ def split_repo(repo_url, subdir, folder):
         repodata.write_bytes(response)
     else:
         print(f"Skipping download of {subdir}/repodata.json. Using cached file.")
+
+    if not run_exports.exists() and "conda-forge" in repo_url:
+        response = download_file(f"{repo_url}/{subdir}/run_exports.json.zst")
+        run_exports.write_bytes(response)
+    else:
+        print(f"Skipping download of {subdir}/run_exports.json. Using cached file.")
     # Parse repodata.json and split into shards
     repodata = json.loads(repodata.read_text())
+    if run_exports.exists():
+        run_exports = json.loads(run_exports.read_text())
+    else:
+        run_exports = None
     packages = repodata["packages"]
     package_names = dict()
     for fn, package in packages.items():
@@ -102,7 +115,7 @@ def split_repo(repo_url, subdir, folder):
     shards.mkdir(exist_ok=True)
     shards_index = {"info": repodata["info"], "shards": {}}
     shards_index["info"]["base_url"] = f"{repo_url}/{subdir}/"
-    shards_index["info"]["shards_base_url"] = f"./shards/"
+    shards_index["info"]["shards_base_url"] = "./shards/"
 
     compressor = zstd.ZstdCompressor(level=19)
 
@@ -111,16 +124,30 @@ def split_repo(repo_url, subdir, folder):
 
     # create a rich progress bar
     for name in track(all_names, description=f"Processing {subdir}"):
-        d = {
-            "packages": {
-                fn: pack_package_record(packages[fn])
-                for fn in package_names.get(name, [])
-            }
-        }
-        d["packages.conda"] = {
-            fn: pack_package_record(conda_packages[fn])
-            for fn in conda_package_names.get(name, [])
-        }
+        if run_exports:
+            run_exports_packages = run_exports.get("packages", {})
+            run_exports_conda_packages = run_exports.get("packages.conda", {})
+        else:
+            run_exports_packages = {}
+            run_exports_conda_packages = {}
+
+        d = {"packages": {}, "packages.conda": {}}
+
+        for fn in package_names.get(name, []):
+            if run_exports and fn not in run_exports_packages:
+                print(f"Missing run_exports for {fn}")
+
+            d["packages"][fn] = pack_package_record(
+                packages[fn], run_exports_packages.get(fn)
+            )
+
+        for fn in conda_package_names.get(name, []):
+            if run_exports and fn not in run_exports_conda_packages:
+                print(f"Missing run_exports for {fn}")
+
+            d["packages.conda"][fn] = pack_package_record(
+                conda_packages[fn], run_exports_conda_packages.get(fn)
+            )
 
         encoded = msgpack.dumps(d)
         # encode with zstd
@@ -153,8 +180,8 @@ def split_repo(repo_url, subdir, folder):
 s3_client = boto3.client(
     service_name="s3",
     endpoint_url="https://e1a7cde76f1780ec06bac859036dbaf7.r2.cloudflarestorage.com",
-    aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-    aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+    aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
+    aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
     region_name="weur",
 )
 
@@ -189,7 +216,7 @@ def files_to_upload(outpath, timestamp, subdir, channel_name):
     # first download current index file from the fast-repo
     index_file = outpath / "old" / timestamp / subdir / "repodata_shards.msgpack"
     index_file.parent.mkdir(parents=True, exist_ok=True)
-    index_url = f"https://fast.prefiks.dev/{channel_name}/{subdir}/repodata_shards.msgpack.zst?bust_cache={timestamp}"
+    index_url = f"https://fast.prefix.dev/{channel_name}/{subdir}/repodata_shards.msgpack.zst?bust_cache={timestamp}"
 
     response = requests.get(index_url)
     files = []
