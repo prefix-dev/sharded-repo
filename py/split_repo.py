@@ -56,7 +56,8 @@ def pack_package_record(record, run_exports=None):
     if md5 := record.get("md5"):
         record["md5"] = bytes.fromhex(md5)
     if run_exports:
-        record["run_exports"] = run_exports
+        record["run_exports"] = run_exports["run_exports"]
+        print(record)
     return record
 
 
@@ -67,9 +68,11 @@ def split_repo(repo_url, subdir, folder):
     if not repodata.parent.exists():
         repodata.parent.mkdir(parents=True)
 
+    is_fast = any([x in repo_url for x in ("conda-forge", "bioconda")])
+
     if not repodata.exists():
         repo_url = repo_url.rstrip("/")
-        if "conda-forge" in repo_url:
+        if is_fast:
             response = download_file(f"{repo_url}/{subdir}/repodata.json.zst")
         else:
             response = download_file(f"{repo_url}/{subdir}/repodata.json")
@@ -77,7 +80,7 @@ def split_repo(repo_url, subdir, folder):
     else:
         print(f"Skipping download of {subdir}/repodata.json. Using cached file.")
 
-    if not run_exports.exists() and "conda-forge" in repo_url:
+    if not run_exports.exists() and is_fast:
         response = download_file(f"{repo_url}/{subdir}/run_exports.json.zst")
         run_exports.write_bytes(response)
     else:
@@ -124,6 +127,8 @@ def split_repo(repo_url, subdir, folder):
 
     # create a rich progress bar
     for name in track(all_names, description=f"Processing {subdir}"):
+        if name != "libzlib":
+            continue
         if run_exports:
             run_exports_packages = run_exports.get("packages", {})
             run_exports_conda_packages = run_exports.get("packages.conda", {})
