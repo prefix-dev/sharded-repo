@@ -56,7 +56,8 @@ def pack_package_record(record, run_exports=None):
     if md5 := record.get("md5"):
         record["md5"] = bytes.fromhex(md5)
     if run_exports:
-        record["run_exports"] = run_exports
+        record["run_exports"] = run_exports["run_exports"]
+        print(record)
     return record
 
 
@@ -126,6 +127,8 @@ def split_repo(repo_url, subdir, folder):
 
     # create a rich progress bar
     for name in track(all_names, description=f"Processing {subdir}"):
+        if name != "libzlib":
+            continue
         if run_exports:
             run_exports_packages = run_exports.get("packages", {})
             run_exports_conda_packages = run_exports.get("packages.conda", {})
